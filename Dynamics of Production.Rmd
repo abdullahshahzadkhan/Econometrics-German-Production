@@ -1,0 +1,303 @@
+---
+title: "The Dynamics of Production: From Linear OLS to Nonlinear MLE"
+author: "Abdullah Shahzad"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+# Clear environment to ensure a fresh start
+rm(list = ls())
+```
+# Introduction & Data Preparation
+
+**Objective:** To model the aggregate production function of the German economy (1950–2019). We begin with a standard Cobb-Douglas specification using OLS and progressively refine the model by diagnosing statistical violations (Autocorrelation) and structural limitations (Nonlinearity).
+
+**Data Source:** Penn World Table 10.0 (`pwt10`).
+
+```{r load_data}
+library(pwt10)
+library(dplyr)
+library(car)
+library(lmtest)
+library(nlme)
+
+# Filter for Germany and select relevant columns
+germany_data <- pwt10.0 %>% 
+  filter(country == "Germany") %>% 
+  select(year, rgdpo, emp, rnna) %>% 
+  rename(gdp = rgdpo, labor = emp, capital = rnna)
+
+# Check structure
+str(germany_data)
+
+# Add log transformations for Linear OLS
+germany_data <- germany_data %>% 
+  mutate(log_Y = log(gdp),
+         log_L = log(labor),
+         log_K = log(capital))
+
+head(germany_data)
+```
+
+# The Basic Model: Log-Linear OLS
+
+We estimate a linearized Cobb-Douglas production function:
+$$\ln(Y_t) = \ln(A) + \beta_L \ln(L_t) + \beta_K \ln(K_t) + e_t$$
+
+```{r ols_model}
+# First Model (Linear): OLS - Line of Best Fit
+model1 <- lm(log_Y ~ log_L + log_K, data = germany_data)
+summary(model1)
+```
+**Insight:** The coefficients are elasticities.
+
+- $$βL≈1.19 and βK≈0.87 (Total: 2.06)$$
+- This indicates extremely high returns to scale (doubling inputs more than doubles output), which is suspicious for a mature economy.
+
+# Diagnostics & Inference
+
+## Multicollinearity Check
+Is the high sum of coefficients caused by Labor and Capital being too correlated?
+
+```{r vif_check}
+vif(model1)
+```
+**Insight:** A VIF of ~3.4 is well below the threshold of 10. Multicollinearity is not the primary cause of the high estimates.
+
+# Hypothesis Testing
+We formally test the Neoclassical assumption of Constant Returns to Scale (CRS): $$ H_0: \beta_L + \beta_K = 1 $$
+
+```{r hypothesis_testing}
+linearHypothesis(model1, "log_L + log_K = 1")
+```
+
+# Breaking Assumptions (GLS)
+
+Standard OLS assumes errors are independent and homoskedastic. Let's check the residuals.
+
+## Visual Inspection
+
+```{r residual_plot}
+plot(germany_data$year, resid(model1), type="o", pch=16, main="OLS Residuals over Time", ylab="Residuals", xlab="Year")
+abline(h=0, col = "red", lwd=2)
+abline(v=1990, col = "blue", lty=2) # German Reunification
+```
+**Insight:** The residuals follow a trend (persistence). Positive errors are followed by positive errors. This indicates Autocorrelation.
+
+## Formal Tests
+
+```{r formal_tests}
+# Heteroskedasticity (Goldfeld-Quandt Test)
+gqtest(model1, order.by = ~year, data = germany_data)
+
+# Autocorrelation (Durbin-Watson Test)
+dwtest(model1)
+```
+
+**Insight:**
+
+- GQ Test: p-value > 0.05. We fail to reject homoskedasticity. Variance is stable.
+- DW Test: d≈0.04. This is extremely low (far from 2), confirming severe positive autocorrelation.
+
+# The Remedy: Generalized Least Squares (GLS)
+
+We re-estimate using GLS with an AR(1) correlation structure to correct the standard errors and coefficients.
+
+```{r gls_model}
+gls_model <- gls(log_Y ~ log_L + log_K, data = germany_data, correlation = corAR1())
+summary(gls_model)
+```
+
+**Finding:** The coefficients dropped: $$L:1.19→1.08, K:0.87→0.78$$ OLS was indeed inflating the estimates due to serial correlation.
+
+# Nonlinear Estimation (NLS)
+
+We move beyond the log-linear approximation and estimate the raw multiplicative model directly:
+$$Y_t = A \cdot L_t^{\beta_L} \cdot K_t^{\beta_K} + e_t$$
+
+```{r nls_estimation}
+# Initialize Values from OLS
+y_int <- coef(model1)["(Intercept)"]
+beta_labor <- coef(model1)["log_L"]
+beta_capital <- coef(model1)["log_K"]
+
+# Run NLS (Gauss-Newton Algorithm)
+model_nls <- nls(gdp ~ A * (labor^beta_L) * (capital^beta_K), 
+    data = germany_data,
+    start = list(A = exp(y_int), beta_L = beta_labor, beta_K = beta_capital),
+    control = nls.control(maxiter = 500))
+
+summary(model_nls)
+```
+
+**Insight:** The Capital elasticity (βK) jumped significantly to ~1.14. Because K is numerically large, NLS prioritizes fitting it to minimize absolute errors.
+
+# Forecasting (Scenario Analysis)
+
+**Scenario:** What happens to German GDP (2020–2024) if Labor stays constant but Capital grows at 2% per year?
+
+```{r prediction}
+# 1. Create Future Data
+last_row <- tail(germany_data, 1)
+labor_last <- last_row$labor
+capital_last <- last_row$capital
+year_last <- last_row$year
+
+year_vals <- (year_last+1):(year_last+5)
+labor_vals <- rep(labor_last, 5)
+capital_vals <- capital_last * 1.02^(1:5)
+
+future_data <- data.frame(year = year_vals, labor = labor_vals, capital = capital_vals)
+
+# 2. Predict
+future_data$predicted_gdp <- predict(model_nls, newdata = future_data)
+
+# 3. Stitch Data for Plotting (Add 2019 point to prevent gap in line)
+last_history_row <- data.frame(
+  year = year_last,
+  labor = labor_last,
+  capital = capital_last,
+  predicted_gdp = last_row$gdp
+)
+plot_data <- rbind(last_history_row, future_data)
+
+# 4. Plot
+plot(germany_data$year, germany_data$gdp,
+     type = "l", col = "black", lwd = 2,
+     main = "German Production: History vs. NLS Forecast",
+     xlab = "Year", ylab = "GDP",
+     xlim = c(1950, max(future_data$year)),
+     ylim = c(0, max(plot_data$predicted_gdp)))
+
+lines(plot_data$year, plot_data$predicted_gdp, col = "red", lwd = 3, lty = 2)
+legend("topleft", legend = c("Historical Data", "NLS Forecast (2% Cap. Growth)"),
+       col = c("black", "red"), lty = c(1, 2), lwd = c(2, 3))
+```
+
+# Appendix: "Under the Hood" (Manual Matrix Algebra)
+
+To demonstrate full understanding of the econometric theory, we replicate the estimators manually using matrix algebra.
+
+## Manual OLS
+$$b = (X'X)^{-1}X'y$$
+
+```{r manual_ols}
+Y <- matrix(log(germany_data$gdp), ncol = 1)
+X <- matrix(c(rep(1, nrow(germany_data)),
+              log(germany_data$labor),
+              log(germany_data$capital)),
+            ncol = 3, byrow = FALSE)
+
+# Estimator
+b_hand <- solve(t(X) %*% X) %*% (t(X) %*% Y)
+print(t(b_hand))
+
+# Variance
+e_hand <- Y - (X %*% b_hand)
+SSR <- as.numeric(t(e_hand) %*% e_hand)
+T <- nrow(X)
+K <- ncol(X)
+sigma2_hand <- SSR / (T - K)
+cov_b <- sigma2_hand * solve(t(X) %*% X)
+se_hand <- sqrt(diag(cov_b))
+
+# T-stats and P-values
+t_stats <- b_hand / se_hand
+p_values <- 2 * pt(-abs(t_stats), T - K)
+results_ols <- cbind(Estimate = b_hand, SE = se_hand, t_stat = t_stats, p_val = p_values)
+print(results_ols)
+```
+
+## Manual Hypothesis Testing (F-Test)
+
+$$
+F = \frac{(Rb - r)' \bigl[ R (X'X)^{-1} R' \bigr] (Rb - r)}{J\,\hat{\sigma}^2}
+$$
+
+```{r manual_f_test}
+R <- matrix(c(0, 1, 1), nrow = 1)
+r <- 1
+J <- 1
+
+discrepancy <- (R %*% b_hand) - r
+middle_term <- solve(R %*% solve(t(X) %*% X) %*% t(R))
+F_stat_hand <- as.numeric((t(discrepancy) %*% middle_term %*% discrepancy) / (J * sigma2_hand))
+p_val_f <- 1 - pf(F_stat_hand, J, T - K)
+
+cat("Manual F-Stat:", F_stat_hand, "\nManual P-Value:", p_val_f)
+```
+
+## Manual GLS
+
+$$bGLS​=(X′Ψ^{−1}X)^{−1}X′Ψ^{−1}y$$
+
+```{r manual_gls}
+# 1. Estimate rho from OLS residuals
+e_t <- e_hand[2:nrow(e_hand)]
+e_t_minus_1 <- e_hand[1:(nrow(e_hand)-1)]
+rho <- sum(e_t * e_t_minus_1) / sum(e_t_minus_1^2)
+print(paste("Rho:", rho))
+
+# 2. Construct Weight Matrix (Psi Inverse)
+exponent_matrix <- abs(outer(1:T, 1:T, "-"))
+psi <- rho^exponent_matrix
+psi_inv <- solve(psi)
+
+# 3. Estimate Beta GLS
+b_gls <- solve(t(X) %*% psi_inv %*% X) %*% (t(X) %*% psi_inv %*% Y)
+print(t(b_gls))
+```
+
+## Manual NLS (Gauss-Newton Algorithm)
+
+$$βnew​=βold​+(Z′Z)^{−1}Z′e$$
+
+```{r manual_nls}
+# Setup
+Y_raw <- germany_data$gdp
+L_raw <- germany_data$labor
+K_raw <- germany_data$capital
+beta_current <- c(exp(b_hand[1]), b_hand[2], b_hand[3]) # Start with OLS
+
+# Iteration Loop
+tol <- 1e-6
+max_iter <- 50
+diff <- 100
+iter <- 0
+
+while (diff > tol && iter < max_iter) {
+  iter <- iter + 1
+  
+  A_curr  <- beta_current[1]
+  bL_curr <- beta_current[2]
+  bK_curr <- beta_current[3]
+  
+  # Predictions and Residuals
+  pred <- A_curr * (L_raw ^ bL_curr) * (K_raw ^ bK_curr)
+  resid_nls <- Y_raw - pred
+  
+  # Gradient Matrix Z
+  d_A  <- pred / A_curr
+  d_bL <- pred * log(L_raw)
+  d_bK <- pred * log(K_raw)
+  Z <- cbind(d_A, d_bL, d_bK)
+  
+  # Update Step (OLS on residuals)
+  delta_beta <- solve(t(Z) %*% Z) %*% (t(Z) %*% resid_nls)
+  
+  # Update Parameters
+  beta_new <- beta_current + as.vector(delta_beta)
+  diff <- max(abs(beta_new - beta_current))
+  beta_current <- beta_new
+}
+
+cat("Converged in", iter, "iterations.\n")
+cat("Manual NLS Parameters:", beta_current)
+```
