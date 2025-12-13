@@ -19,7 +19,7 @@ The goal was not just to fit a model, but to replicate the theoretical progressi
 * **Libraries:** `pwt10`, `nlme`, `car`, `lmtest`, `dplyr`
 * **Concepts:** Matrix Algebra, Maximum Likelihood, Optimization Algorithms, Time Series.
 
-## 📊 Sample Insight
+## 📊 Insight
 Initial OLS modeling suggested Returns to Scale of **2.06**, which is theoretically improbable for a mature economy. By diagnosing autocorrelation and switching to a GLS estimator, we corrected the standard errors and coefficients, revealing that the OLS estimates were inflated by persistent trends in the residuals.
 
 ---
