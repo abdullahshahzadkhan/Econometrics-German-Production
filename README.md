@@ -1,4 +1,5 @@
-# Applied Econometrics: Modeling German Production in R [Read the Full Report] (https://abdullahshahzadkhan.github.io/Econometrics-German-Production/)
+# Applied Econometrics: Modeling German Production in R 
+[Read the Full Report](https://abdullahshahzadkhan.github.io/Econometrics-German-Production/)
 
 ## 📌 Project Overview
 This project bridges the gap between theoretical econometrics and practical application. Using data from the **Penn World Table (10.0)**, I modeled the aggregate production function of the German economy from 1950 to 2019.
